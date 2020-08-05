@@ -8,6 +8,9 @@ import android.net.NetworkInfo;
 import android.net.wifi.p2p.WifiP2pManager;
 import android.widget.Toast;
 
+
+
+///https://developer.android.com/guide/topics/connectivity/wifip2p#create-br
 public class WiFiDirectBroadcastReceiver extends BroadcastReceiver {
     private WifiP2pManager mManager;
     private WifiP2pManager.Channel mChannel;
@@ -33,7 +36,7 @@ public class WiFiDirectBroadcastReceiver extends BroadcastReceiver {
             Toast.makeText(context, "Wi-Fi enabled",Toast.LENGTH_SHORT).show();  //pop-up to make the user aware of the state of Wi-Fi, Wi-Fi must be on for Wi-Fi D2D to work
 
         }else {
-            Toast.makeText(context, "Wi-Fi disabled",Toast.LENGTH_SHORT).show(); //pop-up to make the user aware of the state of Wi-Fi
+            Toast.makeText(context, "Wi-Fi disabled",Toast.LENGTH_SHORT).show(); //po p-up to make the user aware of the state of Wi-Fi
         }
 
     }else if(WifiP2pManager.WIFI_P2P_PEERS_CHANGED_ACTION.equals(action)){

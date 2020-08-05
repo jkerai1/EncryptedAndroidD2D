@@ -19,7 +19,7 @@ import java.util.Map;
 import javax.crypto.Cipher;
 
 
-public class rsa {
+public class rsa { //Reference: KodeTR
     public static final String KEY_ALGORITHM = "RSA";
     public static final String SIGNATURE_ALGORITHM = "MD5withRSA";
 
@@ -36,7 +36,6 @@ public class rsa {
     public static String sign(byte[] data, String privateKey) throws Exception {
 
         byte[] keyBytes = decryptBASE64(privateKey);
-
 
         PKCS8EncodedKeySpec pkcs8KeySpec = new PKCS8EncodedKeySpec(keyBytes);
 
@@ -103,7 +102,6 @@ public class rsa {
         X509EncodedKeySpec x509KeySpec = new X509EncodedKeySpec(keyBytes);
         KeyFactory keyFactory = KeyFactory.getInstance(KEY_ALGORITHM);
         Key publicKey = keyFactory.generatePublic(x509KeySpec);
-
 
         Cipher cipher = Cipher.getInstance(keyFactory.getAlgorithm());
         cipher.init(Cipher.ENCRYPT_MODE, publicKey);
