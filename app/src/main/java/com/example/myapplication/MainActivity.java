@@ -5,7 +5,6 @@ import android.annotation.SuppressLint;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.IntentFilter;
-import android.media.audiofx.DynamicsProcessing;
 import android.net.wifi.WifiManager;
 import android.net.wifi.p2p.WifiP2pConfig;
 import android.net.wifi.p2p.WifiP2pDevice;
@@ -18,7 +17,10 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.os.Message;
 import android.util.Base64;
-import android.util.Log;
+
+import java.io.UnsupportedEncodingException;
+import java.security.Signature;
+
 import android.view.View;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
@@ -27,22 +29,24 @@ import android.widget.EditText;
 import android.widget.ListView;
 import android.widget.TextView;
 import android.widget.Toast;
+
 import androidx.annotation.NonNull;
 import androidx.annotation.RequiresApi;
 import androidx.appcompat.app.AppCompatActivity;
 
 import com.gun0912.tedpermission.PermissionListener;
 import com.gun0912.tedpermission.TedPermission;
+
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
-import java.io.UnsupportedEncodingException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.NetworkInterface;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.net.SocketException;
+import java.nio.charset.StandardCharsets;
 import java.security.InvalidKeyException;
 import java.security.Key;
 import java.security.KeyFactory;
@@ -52,6 +56,8 @@ import java.security.NoSuchAlgorithmException;
 import java.security.PrivateKey;
 import java.security.PublicKey;
 import java.security.SecureRandom;
+import java.security.SignatureException;
+import java.security.spec.InvalidKeySpecException;
 import java.security.spec.KeySpec;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.X509EncodedKeySpec;
@@ -71,10 +77,9 @@ import javax.crypto.spec.SecretKeySpec;
 import static javax.crypto.Cipher.ENCRYPT_MODE;
 import static javax.crypto.Cipher.getInstance;
 
-
-
 @RequiresApi(api = Build.VERSION_CODES.O)
 public class MainActivity extends AppCompatActivity {
+
     //UI elements
     Button btnDiscover, btnSend;
     ListView listView;
@@ -108,36 +113,58 @@ public class MainActivity extends AppCompatActivity {
     boolean keySent = false;
     boolean BothKeysExchanged = false;
     boolean stagetwo = false;
-    boolean stagethree =false;
     boolean DecideonP =false;
     boolean DecideonG = false;
     boolean NonceReceived =false;
-    boolean NonceCheck;
+    boolean NonceCheck =false;
     boolean HideMyKey = false;
     boolean StageTwoComplete =false;
+    boolean stagethree =false;
+    boolean NonceSent =false;
+    boolean StageThreeComplete =false;
+    boolean SavedNonce =false;
+
+    boolean MC1Sent =false;
+    boolean MC1Received =false;
+    boolean MC2Sent = false;
+    boolean MC2Received =false;
+    boolean MC3Sent =false;
+    boolean MC3Received =false;
+    boolean DontEncryptSig = false;
+    boolean StageThreePart2Start = false;
+    String Placeholder = null;
+    private String NonceMC2;
+
     String Nonce =GenerateNonce();
+    String CheckNonce;
+    String ExtractedNonce = "";
 
-
-    PublicKey publicKey;
-    PrivateKey privateKey;
-    private KeyPair kp;
+     PublicKey publicKey;
+     PrivateKey privateKey;
+     KeyPair kp;
     String RecipientKey;
     byte[] privateKeyBytes;
     byte[] publicKeyBytes;
-    private String privateKeyBytesBase64;
-    private String publicKeyBytesBase64;
+     String privateKeyBytesBase64;
+     String publicKeyBytesBase64;
+     PublicKey RecipientKeyy;
+
+
 
     private Cipher cipher,decipher;
     private SecretKeySpec secretKeySpec;
 
    // String Nonce=GenerateNonce(); //nei or nej
-    private byte encryptionKey[] = {9,115,51,86,105,4,-31,-23,-68,88,17,20,3,-105,119,53} ; //generate key using my proto, here is just a dummy key
+    private byte[] encryptionKey = {9,115,51,86,105,4,-31,-23,-68,88,17,20,3,-105,119,53} ; //generate key using my proto, here is just a dummy key
+    private static Context mContext;
+    private boolean StageThreeCompletePart1 = false;
 
-   // @RequiresApi(api = Build.VERSION_CODES.O)
+    // @RequiresApi(api = Build.VERSION_CODES.O)
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+
         initialWork();
         exqListener();
 
@@ -145,14 +172,11 @@ public class MainActivity extends AppCompatActivity {
             cipher = Cipher.getInstance("AES"); //final stage once secret is established
             decipher = Cipher.getInstance("AES");
             secretKeySpec = new SecretKeySpec(encryptionKey, "AES");
-        } catch (NoSuchAlgorithmException e) {
-            e.printStackTrace();
-        } catch (NoSuchPaddingException e) {
-            e.printStackTrace();
-        }
+        } catch (NoSuchAlgorithmException e) { e.printStackTrace(); } catch (NoSuchPaddingException e) { e.printStackTrace(); }
     }
 
     Handler handler = new Handler(new Handler.Callback() {
+
 
         @RequiresApi(api = Build.VERSION_CODES.O)
         @Override
@@ -163,42 +187,115 @@ public class MainActivity extends AppCompatActivity {
                     byte[] readBuff = (byte[]) message.obj;
                     String tempMsg = new String(readBuff, 0, message.arg1);
 
-                    if(FirstSentMessage){
 
-                        RecipientKey = AESDecryptionMethod(tempMsg); //first actual message is ignored and replaced w/ pub key
-                        Toast.makeText(MainActivity.this,"Key Received",Toast.LENGTH_SHORT).show();
-                        keyReceived =true;
-                        FirstSentMessage =false;
+                    //refresh
+                    if (FirstSentMessage && !keyReceived){ //&& !BothKeysExchanged) {
+                        if(tempMsg.length() <100){
+                            Toast.makeText(MainActivity.this,"Key Size too small",Toast.LENGTH_LONG).show();
+                        }else {
+                            RecipientKey = AESDecryptionMethod(tempMsg); //first actual message is ignored and replaced w/ pub key
+                            Toast.makeText(MainActivity.this, "Key Received", Toast.LENGTH_SHORT).show();
+                            keyReceived = true;
+                            FirstSentMessage = false;
 
-                        if(keySent){
-                            BothKeysExchanged =true;
-                            Toast.makeText(MainActivity.this,"Both Public Keys Exchanged",Toast.LENGTH_SHORT).show();
-                            stagetwo = true;
+                            if (keySent) {
+                                BothKeysExchanged = true;
+                                Toast.makeText(MainActivity.this, "Both Public Keys Exchanged", Toast.LENGTH_SHORT).show(); //only one device will show this
+                            }
                         }
 
-                        }
-
+                    }
                     else {
-                        //if(tempMsg.startsWith("0C:E0:DC")|tempMsg.startsWith("A4:50:46")){ //hardcode check im talking to right person
-                            //String dummy = GetMacAddress() + "   ";
-                            //String CheckNonce = tempMsg.substring(dummy.length()); //define a substring that starts at the end of the mac address + space. The remaining is nonce sent by partner
-                           // NonceCheck = tempMsg.endsWith(CheckNonce); //does string end with nonce I sent them?
-                            //NonceReceived =true; }
 
-                        message_history.add("[THEM  " + TimeStamp() + "]  " + decryptRSAToString(tempMsg,privateKeyBytesBase64));
+
+                        if(tempMsg==null){
+                           Toast.makeText(MainActivity.this,"INVALID MESSAGE",Toast.LENGTH_SHORT).show();
+                    }
+
+                        else {
+                           // Toast.makeText(MainActivity.this,"Incoming Message",Toast.LENGTH_SHORT).show();
+
+                            String Msg = decryptRSAToString(tempMsg, privateKeyBytesBase64,true);
+
+                            if(StageThreeCompletePart1){
+                                //message_history.add("IM HERE");
+                                tempMsg = tempMsg + Placeholder; //append both parts of string
+
+                                tempMsg = decryptRSAToString(tempMsg,privateKeyBytesBase64,true);
+                                message_history.add("Round 1 " + tempMsg);
+                                tempMsg = decryptRSAToString(tempMsg, RecipientKey,false);
+                                message_history.add("Round 2 " + tempMsg);
+                                //message_history.add("Attempting double decryption");
+                                Msg = tempMsg;
+                                StageThreeCompletePart1 = false;
+
+                                //ExtractedNonce = Msg.substring(0, 64); //get first 64 characters i.e Nonce // check here for my nonce
+                                //String NonceMC2 = Msg.substring(66,Msg.length());
+                                // message_history.add("[THEM  " + TimeStamp() + "]  " + "MC2: " + tempMsg1 + tempMsg1.length()); //length of Cleartext 0
+
+                                //if(ExtractedNonce.equals(Nonce)){ //if nonce received is nonce I sent
+                                //  message_history.add("NONCES MATCH!");
+                                //}else{
+                                //  message_history.add("Nonce: " + Nonce + " Extracted Nonce: " + ExtractedNonce + "MC2NONCE " + NonceMC2);
+                                //}
+                            }
+
+                            if((!StageThreeComplete)){
+
+                            if (Msg.contains(":")) {//(Msg.startsWith("0C:E0:DC") | Msg.startsWith("A4:50:46")|Msg.startsWith("EE:12:CC") | Msg.startsWith("A2:0B")) {//hardcode check
+                              NonceReceived = true;
+                              MC1Received = true;
+
+
+                                CheckNonce = Msg.substring(20,Msg.length()); //define a substring that starts at the end of the mac address + space. The remaining is nonce sent by partner
+                              //Toast.makeText(MainActivity.this, "Nonce Received", Toast.LENGTH_SHORT).show();
+                                message_history.add("NONCE RECEIVED: " + CheckNonce);
+                               stagethree =true; //Ive received MC1 i need to send MC2
+                               //message_history.add("[THEM  " + TimeStamp() + "]  " + Msg); //will not display a message unless it is encrypted and contains correct MAC address
+                                Toast.makeText(MainActivity.this, "Please Send MC2 ", Toast.LENGTH_SHORT).show();
+                            }
+
+
+                            ///NEED TO HANDLE MC2
+
+                                if(MC1Sent && !StageThreeComplete && !MC1Received && NonceSent && !NonceReceived) { //If i Sent MC1 I then need to handle MC2
+
+
+                                    //VerifySign(tempMsg);
+                                    //Msg = decryptRSAToString(Msg,privateKeyBytesBase64,true);
+                                    Msg = decryptRSAToString(tempMsg, RecipientKey,false);//decrypt inner message with their public key as inner message was encrypted with Partners priv key
+
+                                    ExtractedNonce = Msg.substring(0, 64); //get first 64 characters i.e Nonce // check here for my nonce
+                                    NonceMC2 = Msg.substring(66,Msg.length());
+                                    // message_history.add("[THEM  " + TimeStamp() + "]  " + "MC2: " + tempMsg1 + tempMsg1.length()); //length of Cleartext 0
+
+                                    if(ExtractedNonce.equals(Nonce)){ //if nonce received is nonce I sent
+                                        message_history.add("NONCES MATCH!");
+                                    }else{
+                                        message_history.add("Nonce: " + Nonce + " Extracted Nonce: " + ExtractedNonce + "MC2NONCE " + NonceMC2);
+                                    }
+                                    StageThreeComplete = true; //never enter this loop again
+                                   // StageThreeCompletePart1 = true; //Toast.makeText(MainActivity.this,"PART1 "+ StageThreeCompletePart1,Toast.LENGTH_LONG).show();
+                                }
+
+
+
+
+                                message_history.add("[THEM  " + TimeStamp() + "]  " + Msg);
+
+                            }else{
+                                message_history.add("[THEM  " + TimeStamp() + "]  " + Msg); //not in stage 3 so PGP
+                            }
+
+                            myAdapter1.notifyDataSetChanged(); //refresh
+                        }
 
                     }
 
-                    //if(DecideonG){ //where we decide on G
-                      //  break;
-                    //}
-
-                    //if(DecideonP){ //here we decide on P
-                      //  break;
-                    //}
-
-                    myAdapter1.notifyDataSetChanged(); //refresh
                     break;
+
+                default:
+                    throw new IllegalStateException("Unexpected value: " + message.what);
             }
             return true;
         }
@@ -267,65 +364,148 @@ public class MainActivity extends AppCompatActivity {
 
                 String msg = writeMsg.getText().toString();
 
-                if (StartofConversation) {
+                String ClearText = msg;
+
+
+                if (StartofConversation) { //Toast.makeText(MainActivity.this,"Start of Conversation",Toast.LENGTH_SHORT).show();
                     msg = AESEncryptionMethod(publicKeyBytesBase64);
-                    keySent =true;
-                    try { Thread.sleep(100); } catch (InterruptedException e) { e.printStackTrace(); } //delay
+                    keySent = true;
+                    try {
+                        Thread.sleep(1000);
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    } //delay
                     StartofConversation = false; //set this boolean to false
-                    HideMyKey =true;
+                    HideMyKey = true;
                 }
 
-                if(keySent && keyReceived){
-                    stagetwo = true;
-                }
-
-                if(stagetwo && !StageTwoComplete){ //now we can send the encrypted nonce + mac address //by using a seperate boolean we can make multiple passes over this func without skipping a step
-                    if(keyReceived) {
+                if (!StageTwoComplete && stagetwo) {// && BothKeysExchanged){ //now we can send the encrypted nonce + mac address //by using a separate boolean we can make multiple passes over this func without skipping a step
+                    if (keyReceived && keySent && (!NonceReceived || !NonceSent)) {
                         msg = GetMacAddress() + "   " + Nonce; //overwrite message
-                        stagetwo = false;
-                        BothKeysExchanged = true;
-                        StageTwoComplete =true;
-                    } else{
-                        Toast.makeText(MainActivity.this, "Partner needs to exchange key", Toast.LENGTH_SHORT).show();
-                    }
+                        ClearText = msg;
+                        // msg = Nonce + "     " + GetMacAddress();
+                        NonceSent = true;
+                        MC1Sent = true;
+                        Toast.makeText(MainActivity.this, "Nonce Sent", Toast.LENGTH_SHORT).show();
+                        try {
+                            Thread.sleep(1000);
+                        } catch (InterruptedException e) {
+                            e.printStackTrace();
+                        } //delay
+                    } else {
+                        Toast.makeText(MainActivity.this, "ELSE", Toast.LENGTH_SHORT).show();
+                        //msg = writeMsg.getText().toString();
+                    }//just in case msg
+                    StageTwoComplete = true;
                 }
 
-                //if(!StageTwoComplete){
+                if (StageThreePart2Start){
+                    msg = encryptRSAToString("HI", privateKeyBytesBase64, false);
+                    ClearText = "Hi Part 2";
+                    //msg = msg.substring(msg.length()/2,msg.length());
+                    StageThreePart2Start = false;
+                }
 
-               // }
+
+
+                if (!StageThreeComplete && !NonceSent && NonceReceived) { //doesn't enter this unless MC1 was RECEIVED
+                    ClearText =CheckNonce + " " + Nonce;
+                     msg = encryptRSAToString(ClearText,privateKeyBytesBase64,false); //their nonce + g^j mod p encrypt with my priv key so partner can decrypt w/ my public key + CheckNonce +Nonce +
+
+                    MC2Sent = true;
+                    MC2Received = false;
+                    BothKeysExchanged = true;
+                    StageThreeComplete = true; //never enter this loop again
+                    DontEncryptSig = true;
+                  //  StageThreePart2Start = true;
+                }
 
 
 
-                //Post Start of Conversation
+
+                    //Post Start of Conversation
+
                     if (BothKeysExchanged) { //only encrypt if Key received
-                        sendtask t3 = new sendtask(encryptRSAToString(msg, RecipientKey)); //create new thread for sending the message
-                        t3.execute(); //start new thread
-                    }
-                    else {
-                        Toast.makeText(MainActivity.this,"WARNING: Unencrypted",Toast.LENGTH_SHORT).show(); //the public key will be sent unencrypted
-                            sendtask t3 = new sendtask((msg)); //create new thread for sending the message
-                            t3.execute(); //start new thread
+
+                        if (msg != null && msg.length() != 0) {
+                            if (!DontEncryptSig) {
+                                msg = encryptRSAToString(msg, RecipientKey, true);
+                               // Toast.makeText(MainActivity.this, "Length of " + msg.length(), Toast.LENGTH_LONG).show();
+                                sendtask t3 = new sendtask(msg);
+
+                               // if (StageThreeComplete) {
+                                 //   message_history.add("Double Encrypted?" + msg + msg.length());
+                                // }
+
+                                try {
+                                    Thread.sleep(500);
+                                } catch (InterruptedException e) {
+                                    e.printStackTrace();
+                                } //delay
+
+                                t3.execute(); //start new thread
+                            } else {
+                                message_history.add(msg);
+
+                                Toast.makeText(MainActivity.this, "Unencrypted", Toast.LENGTH_SHORT).show(); //sent using pre-key -> basically no encryption
+                                sendtask t3 = new sendtask(msg);
+                                t3.execute();
+                                DontEncryptSig = false;
+                            }
+                        } else {
+                            Toast.makeText(MainActivity.this, "NULL MESSAGE", Toast.LENGTH_LONG).show();
                         }
+                    } else {
+                        if (!HideMyKey) {
+                            Toast.makeText(MainActivity.this, "WARNING: Unencrypted", Toast.LENGTH_SHORT).show(); //sent using pre-key -> basically no encryption
+                        }
+                        sendtask t3 = new sendtask(msg); //  Toast.makeText(MainActivity.this, "keyReceived" + " "+ keyReceived  +" " +keySent  +" Both "+BothKeysExchanged  +" 2: " +stagetwo, Toast.LENGTH_SHORT).show();
+                        t3.execute(); //start new thread
+
+                        if (RecipientKey != null && RecipientKey.length() > 100) {
+                            keyReceived = true;
+
+                            if (keySent) {
+                                BothKeysExchanged = true;
+                                // Toast.makeText(MainActivity.this, "Public Keys Exchanged", Toast.LENGTH_SHORT).show();
+                                stagetwo = true; //no danger of rerunnning stage 2 as stagetwocomplete flag set to true but we want to run on second attempt
+                            }
+
+                        } else {
+                            Toast.makeText(MainActivity.this, "Need Partner Key/Key Invalid", Toast.LENGTH_SHORT).show();
+                        }
+
+                    }
+
+
                 if (!HideMyKey) {
-                    message_history.add("[YOU  " + TimeStamp() + "]  " + msg); //Update message history, no need to encrypt/decrypt client side messages
-                }else{
-                    Toast.makeText(MainActivity.this,"Hidden Your Key",Toast.LENGTH_SHORT).show();
-                }
+                    //try { Thread.sleep(100); } catch (InterruptedException e) { e.printStackTrace(); }
+                    message_history.add("[YOU  " + TimeStamp() + "]  " + (ClearText)); //Update message history, no need to encrypt/decrypt client side messages
+                    myAdapter1.notifyDataSetChanged(); //refresh
 
-                HideMyKey=false;
-
+                } else {
+                    Toast.makeText(MainActivity.this, "Hidden Your Key", Toast.LENGTH_SHORT).show();
+                    HideMyKey = false;
                 }
+            }
+
+          //  secretKeySpec = new SecretKeySpec(encryptionKey, "AES"); update encryption key, encryptionKey = sessionkey.getBytes()
+
+            //MessageDigest sha = MessageDigest.getInstance("SHA-1");
+            //key = sha.digest(sessionkey.getBytes("UTF-8"));
+            //key = Arrays.copyOf(key, 16); // use only first 128 bit
+           // secretKeySpec = new SecretKeySpec(key, "AES");
         });
     }
 
     //@RequiresApi(api = Build.VERSION_CODES.O)
     private void initialWork() {
         // Read in UI by ID defined in the XML
-        btnDiscover = (Button) findViewById(R.id.discover);
-        btnSend = (Button) findViewById(R.id.sendButton);
-        listView = (ListView) findViewById(R.id.peerListView);
+        btnDiscover = findViewById(R.id.discover);
+        btnSend = findViewById(R.id.sendButton);
+        listView = findViewById(R.id.peerListView);
         MessageHistory = findViewById(R.id.MessageHistory);
-        connectionStatus = (TextView) findViewById(R.id.connectionStatus);
+        connectionStatus = findViewById(R.id.connectionStatus);
         writeMsg = findViewById(R.id.writeMsg);
 
         myAdapter1 = new ArrayAdapter<String>(this,android.R.layout.simple_list_item_1,message_history);
@@ -346,13 +526,17 @@ public class MainActivity extends AppCompatActivity {
 
 
         kp =  getKeyPair(); //generate key pair from spec
-        publicKey =kp.getPublic(); //read public key
-        publicKeyBytes = publicKey.getEncoded();
-        publicKeyBytesBase64 = new String(Base64.encode(publicKeyBytes, Base64.DEFAULT)); //process to string for sending
 
         privateKey =kp.getPrivate();//get priv key
         privateKeyBytes = privateKey.getEncoded();
         privateKeyBytesBase64 = new String(Base64.encode(privateKeyBytes, Base64.DEFAULT));
+        RecipientKey =null;
+
+
+        publicKey =kp.getPublic(); //read public key
+        publicKeyBytes = publicKey.getEncoded(); //bytes
+        publicKeyBytesBase64 = new String(Base64.encode(publicKeyBytes, Base64.DEFAULT)); //process to string for sending
+
 
 
     }
@@ -375,7 +559,7 @@ public class MainActivity extends AppCompatActivity {
                 }
                 ArrayAdapter<String> adapter = new ArrayAdapter<String>(getApplicationContext(), android.R.layout.simple_list_item_1, deviceNameArray);
                 listView.setAdapter(adapter);
-                adapter.notifyDataSetChanged(); //?
+                //adapter.notifyDataSetChanged(); //?
             }
             if (peers.size() == 0) {
                 Toast.makeText(getApplicationContext(), "No Devices Found ", Toast.LENGTH_SHORT).show();  // tell the user no devices where found,
@@ -579,7 +763,7 @@ public class MainActivity extends AppCompatActivity {
                 .check();
     }
     private static String TimeStamp() {
-        String currentTime = new SimpleDateFormat("HH:mm", Locale.getDefault()).format(new Date());
+        String currentTime = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date());
         return currentTime;
     }
 
@@ -625,12 +809,12 @@ public class MainActivity extends AppCompatActivity {
         return stringMac.substring(0,stringMac.length()-1); //strip last semi colon off
     }
 
-
-    public static KeyPair getKeyPair() {
+    public KeyPair getKeyPair() { //depreciated since API 24
         KeyPair kp = null;
+        SecureRandom Random = new SecureRandom();
         try {
-            KeyPairGenerator kpg = KeyPairGenerator.getInstance("RSA");
-            kpg.initialize(2048);
+            KeyPairGenerator kpg  = KeyPairGenerator.getInstance("RSA");
+            kpg.initialize(2048,Random); //Key size proportional to message length!
             kp = kpg.generateKeyPair();
         } catch (Exception e) {
             e.printStackTrace();
@@ -638,45 +822,64 @@ public class MainActivity extends AppCompatActivity {
         return kp;
     }
 
-    public static String encryptRSAToString(String clearText, String publicKey) { //https://stackoverflow.com/questions/12471999/rsa-encryption-decryption-in-android
+
+    public static String encryptRSAToString(String clearText, String publicKey,boolean FLAG) { //https://stackoverflow.com/questions/12471999/rsa-encryption-decryption-in-android
 
         String encryptedBase64 = "";
         try {
+
             KeyFactory keyFac = KeyFactory.getInstance("RSA");
-            KeySpec keySpec = new X509EncodedKeySpec(Base64.decode(publicKey.trim().getBytes(), Base64.DEFAULT)); //take string key and encode
-            Key key = keyFac.generatePublic(keySpec);
 
-            final Cipher cipher = getInstance("RSA/ECB/OAEPWITHSHA-256ANDMGF1PADDING"); // get an RSA cipher object and print the provider
-            cipher.init(ENCRYPT_MODE, key); // encrypt the plain text using the public key
+            if(FLAG ==true) {
 
-            byte[] encryptedBytes = cipher.doFinal(clearText.getBytes("UTF-8"));
-            encryptedBase64 = new String(Base64.encode(encryptedBytes, Base64.DEFAULT));
+                KeySpec keySpec = new X509EncodedKeySpec(Base64.decode(publicKey.trim().getBytes(), Base64.DEFAULT)); //take string key and encode
+                Key key = keyFac.generatePublic(keySpec);
+                final Cipher cipher = getInstance("RSA/ECB/OAEPWITHSHA-256ANDMGF1PADDING"); // get an RSA cipher object and print the provider
+                cipher.init(ENCRYPT_MODE, key); // encrypt the plain text using the public key
+                byte[] encryptedBytes = cipher.doFinal(clearText.getBytes("UTF-8"));
+                encryptedBase64 = new String(Base64.encode(encryptedBytes, Base64.DEFAULT));
 
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
+            }
+            else{
+
+                KeySpec keySpec = new PKCS8EncodedKeySpec(Base64.decode(publicKey.trim().getBytes(), Base64.DEFAULT));
+                Key key = keyFac.generatePrivate(keySpec); //Nullor long
+                final Cipher cipher = getInstance("RSA/ECB/OAEPWITHSHA-256ANDMGF1PADDING"); // get an RSA cipher object and print the provider
+                cipher.init(ENCRYPT_MODE, key);
+                byte[] encryptedBytes = cipher.doFinal(clearText.getBytes("UTF-8"));
+                encryptedBase64 = new String(Base64.encode(encryptedBytes, Base64.DEFAULT));
+            }
+        } catch (Exception e) { e.printStackTrace(); }
         return encryptedBase64.replaceAll("(\\r|\\n)", "");
     }
 
-    public static String decryptRSAToString(String encryptedBase64, String privateKey) { //for PGP
+    public static String decryptRSAToString(String encryptedBase64, String privateKey,boolean FLAG){//, boolean FLAG) { //for PGP
 
         String decryptedString = "";
         try {
             KeyFactory keyFac = KeyFactory.getInstance("RSA");
-            KeySpec keySpec = new PKCS8EncodedKeySpec(Base64.decode(privateKey.trim().getBytes(), Base64.DEFAULT));
-            Key key = keyFac.generatePrivate(keySpec);
 
-            // get an RSA cipher object and print the provider
-            final Cipher cipher = Cipher.getInstance("RSA/ECB/OAEPWITHSHA-256ANDMGF1PADDING");
-            // encrypt the plain text using the public key
-            cipher.init(Cipher.DECRYPT_MODE, key);
+            if(FLAG == true){
+                KeySpec keySpec = new PKCS8EncodedKeySpec(Base64.decode(privateKey.trim().getBytes(), Base64.DEFAULT));
+                Key key = keyFac.generatePrivate(keySpec);
+                final Cipher cipher = Cipher.getInstance("RSA/ECB/OAEPWITHSHA-256ANDMGF1PADDING");
+                // encrypt the plain text using the public key
+                cipher.init(Cipher.DECRYPT_MODE, key);
+                byte[] encryptedBytes = Base64.decode(encryptedBase64, Base64.DEFAULT);
+                byte[] decryptedBytes = cipher.doFinal(encryptedBytes);
+                decryptedString = new String(decryptedBytes);
+            }
+            else{ //encode private key like a public key
+                KeySpec keySpec = new X509EncodedKeySpec(Base64.decode(privateKey.trim().getBytes(), Base64.DEFAULT));
+                Key key = keyFac.generatePublic(keySpec);
+                final Cipher cipher = Cipher.getInstance("RSA/ECB/OAEPWITHSHA-256ANDMGF1PADDING");
+                cipher.init(Cipher.DECRYPT_MODE, key);
+                byte[] encryptedBytes = Base64.decode(encryptedBase64, Base64.DEFAULT);
+                byte[] decryptedBytes = cipher.doFinal(encryptedBytes);
+                decryptedString = new String(decryptedBytes);
+            }
 
-            byte[] encryptedBytes = Base64.decode(encryptedBase64, Base64.DEFAULT);
-            byte[] decryptedBytes = cipher.doFinal(encryptedBytes);
-            decryptedString = new String(decryptedBytes);
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
+        } catch (Exception e) { e.printStackTrace(); }
         return decryptedString;
     }
     private String AESEncryptionMethod(String string){ //AES is symmetric, same key to encrypt and decrypt
@@ -690,29 +893,61 @@ public class MainActivity extends AppCompatActivity {
             e.printStackTrace();
         }
         String returnString = null;
-        try {
-            returnString = new String(encryptedByte,"ISO-8859-1");//specifying what character set to use
-        } catch (UnsupportedEncodingException e) {
-            e.printStackTrace();
-        }
+        returnString = new String(encryptedByte, StandardCharsets.ISO_8859_1);//specifying what character set to use
         return returnString;
     }
 
     private String AESDecryptionMethod(String string) {
         String decryptedString = null;
         try {
-            byte[] EncryptedByte = string.getBytes("ISO-8859-1"); //specifying what character set to use
+            byte[] EncryptedByte = string.getBytes(StandardCharsets.ISO_8859_1); //specifying what character set to use (8 bit)
             decryptedString = string;
             byte[] decryption;
-            decipher.init(cipher.DECRYPT_MODE, secretKeySpec); // init decrypt mode with key
+            decipher.init(Cipher.DECRYPT_MODE, secretKeySpec); // init decrypt mode with key
             decryption = decipher.doFinal(EncryptedByte); // pass encrypted msg to algorithm
             decryptedString = new String(decryption); //Plaintext
 
-        } catch (BadPaddingException | IllegalBlockSizeException | InvalidKeyException | UnsupportedEncodingException e) {
-            e.printStackTrace();
-        }
+        } catch (BadPaddingException | IllegalBlockSizeException | InvalidKeyException e) { e.printStackTrace(); }
         return decryptedString;
     }
+
+
+    private String GenerateSignature(String textToSign){
+        String SignatureToReturn = null;
+        try {
+            byte[] tmsg = textToSign.getBytes("UTF-8");
+            Signature sig = Signature.getInstance("SHA1WithRSA");
+            sig.initSign(privateKey);
+            sig.update(tmsg);
+            byte[] signatureBytes = sig.sign();
+            SignatureToReturn = new String(Base64.encode(signatureBytes,Base64.DEFAULT));
+        } catch (InvalidKeyException e) { e.printStackTrace(); } catch (NoSuchAlgorithmException e) { e.printStackTrace(); } catch (UnsupportedEncodingException e) { e.printStackTrace(); } catch (SignatureException e) { e.printStackTrace(); }
+        return SignatureToReturn;
+    }
+
+    private boolean VerifySign(String tempMsg) {
+        boolean SigState = false;
+        try {
+            byte[] tmsg = ("HI").getBytes("UTF-8");
+            Signature sig = Signature.getInstance("SHA1WithRSA");  //same algorithm
+            //Rebuild Key
+            KeyFactory keyFac = KeyFactory.getInstance("RSA");
+            KeySpec keySpec = new X509EncodedKeySpec(Base64.decode(RecipientKey.trim().getBytes(), Base64.DEFAULT)); //take string key and encode
+
+            RecipientKeyy = keyFac.generatePublic(keySpec);
+            sig.initVerify(RecipientKeyy);
+            sig.update(tmsg);
+
+            SigState = sig.verify(tempMsg.getBytes("UTF-8")); //Inverse Operation?
+            message_history.add(tempMsg + " " + SigState);
+
+            if (SigState) { message_history.add("SIGNATURE VERIFIED"); } else { message_history.add("SIGNATURE NOT VERIFIED"); }
+
+        } catch (NoSuchAlgorithmException | InvalidKeySpecException e) { e.printStackTrace(); } catch (InvalidKeyException e) { e.printStackTrace(); } catch (SignatureException e) { e.printStackTrace(); } catch (UnsupportedEncodingException e) { e.printStackTrace(); }
+
+        return SigState;
+    }
+
 }
 
 
