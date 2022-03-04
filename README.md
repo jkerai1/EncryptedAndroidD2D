@@ -1,7 +1,5 @@
 # EncryptedAndroidD2D
 
-This was an android application (written in Java) I made to have an encrypted chat using a protocol of my choosing using Wi-Fi Direct.
-
 The aim of this project is to create a mobile phone application which will allow two users to 
 communicate securely using Wi-Fi Direct. This would allow for communication without a server. This 
 would stop traffic being routed through the internet, eliminating any attacker who is not in the 
